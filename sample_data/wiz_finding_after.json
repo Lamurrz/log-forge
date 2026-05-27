@@ -1,0 +1,61 @@
+{
+  "ocsf_version": "1.3.0",
+  "class_uid": 5019,
+  "category_uid": 2,
+  "activity_id": 1,
+  "activity_name": "Create",
+  "time": 1715328000000,
+  "metadata": {
+    "uid": "317de774-3145-7631-30c9-bc7435f0304e",
+    "version": "1.3.0",
+    "product": {
+      "vendor_name": "Wiz",
+      "name": "Wiz"
+    },
+    "processed_time": 1779915805652,
+    "schema_url": "https://schema.ocsf.io"
+  },
+  "unmapped": {},
+  "finding": {
+    "uid": "wiz-finding-0001",
+    "title": "S3 bucket is publicly accessible",
+    "description": "The S3 bucket allows public read access without authentication.",
+    "type": "Misconfiguration",
+    "remediation": {
+      "desc": "Enable S3 Block Public Access settings on the bucket and account level."
+    },
+    "created_time": 1715328000000,
+    "modified_time": 1715328300000,
+    "first_seen_time": 1715328000000,
+    "last_seen_time": 1715328300000
+  },
+  "rule": {
+    "uid": "rule-001",
+    "name": "S3 bucket public access",
+    "short_id": "WIZ-0042"
+  },
+  "resource": {
+    "uid": "res-bucket-001",
+    "name": "my-data-bucket",
+    "type": "BUCKET",
+    "cloud": {
+      "provider": "AWS",
+      "region": "us-east-1",
+      "account": {
+        "uid": "123456789012",
+        "name": "prod-account",
+        "type": "Account"
+      }
+    }
+  },
+  "compliance": {
+    "requirements": [],
+    "control": "S3 bucket public access",
+    "status": "Open"
+  },
+  "status": "Open",
+  "status_id": 99,
+  "severity": "High",
+  "severity_id": 4,
+  "comment": "Reviewed by security team \u2014 remediation in progress"
+}
