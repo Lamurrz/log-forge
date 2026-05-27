@@ -1,0 +1,34 @@
+[
+  {
+    "id": "wiz-finding-0001",
+    "createdAt": "2024-05-10T08:00:00Z",
+    "updatedAt": "2024-05-10T08:05:00Z",
+    "resolvedAt": null,
+    "status": "OPEN",
+    "severity": "HIGH",
+    "name": "S3 bucket is publicly accessible",
+    "description": "The S3 bucket allows public read access without authentication.",
+    "remediation": "Enable S3 Block Public Access settings on the bucket and account level.",
+    "type": {
+      "name": "Misconfiguration"
+    },
+    "resource": {
+      "id": "res-bucket-001",
+      "name": "my-data-bucket",
+      "type": "BUCKET",
+      "cloudProvider": "AWS",
+      "region": "us-east-1",
+      "subscription": {
+        "id": "sub-001",
+        "name": "prod-account",
+        "externalId": "123456789012"
+      }
+    },
+    "rule": {
+      "id": "rule-001",
+      "name": "S3 bucket public access",
+      "shortId": "WIZ-0042"
+    },
+    "note": "Reviewed by security team \u2014 remediation in progress"
+  }
+]
