@@ -1,4 +1,4 @@
-# ocsf-transformer
+# ocsf-event-class-identifier
 
 **Vendor Log → [OCSF](https://schema.ocsf.io) Schema Transformer**
 
