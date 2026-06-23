@@ -2,7 +2,7 @@
 
 **Vendor Log → [OCSF](https://schema.ocsf.io) Schema Transformer**
 
-A security-engineer utility that normalises raw vendor logs from Microsoft Entra ID, Okta, Wiz, and Palo Alto Networks PAN-OS into the [Open Cybersecurity Schema Framework (OCSF) 1.3.0](https://schema.ocsf.io) — the lingua franca for modern SIEMs and security data lakes.
+A security-engineer utility that normalises raw vendor logs from Microsoft Entra ID, Okta, Windows Security Event Log, Wiz, and Palo Alto Networks PAN-OS into the [Open Cybersecurity Schema Framework (OCSF) 1.3.0](https://schema.ocsf.io) — the lingua franca for modern SIEMs and security data lakes.
 
 ---
 
@@ -15,6 +15,7 @@ A security-engineer utility that normalises raw vendor logs from Microsoft Entra
 5. [Mapping Logic & Schema Decisions](#mapping-logic--schema-decisions)
    - [Microsoft Entra ID → Authentication (3002)](#microsoft-entra-id--authentication-3002)
    - [Okta → Authentication (3002)](#okta--authentication-3002)
+   - [Windows Security Event Log → Authentication / Process Activity / Account Change](#windows-security-event-log--authentication-3002--process-activity-1007--account-change-5001)
    - [Wiz → Configuration Finding (5019)](#wiz--configuration-finding-5019)
    - [Palo Alto PAN-OS → Network Activity (4001)](#palo-alto-pan-os--network-activity-4001)
 6. [Sample Data](#sample-data)
@@ -44,6 +45,7 @@ OCSF solves this by providing:
 |-----|--------|----------|------------|-----------|--------------|
 | `entra` | Microsoft Entra ID | Sign-In logs | Authentication | 3002 | 3 (Identity & Access Mgmt) |
 | `okta` | Okta | System Log | Authentication | 3002 | 3 (Identity & Access Mgmt) |
+| `windows` | Microsoft Windows | Security Event Log (EVTX JSON) | Authentication / Process Activity / Account Change | 3002 / 1007 / 5001 | 3 / 1 / 3 |
 | `wiz` | Wiz | Issues / Findings | Configuration Finding | 5019 | 2 (Findings) |
 | `pan` | Palo Alto Networks | PAN-OS Auth (JSON) | Network Activity | 4001 | 4 (Network Activity) |
 
@@ -57,6 +59,9 @@ python ocsf_transformer.py --vendor entra --input sample_data/entra_signin_befor
 
 # Okta System Log
 python ocsf_transformer.py --vendor okta --input sample_data/okta_session_start_before.json --stdout
+
+# Windows Security Events (batch)
+python ocsf_transformer.py --vendor windows --input sample_data/windows_security_events_before.json --stdout
 
 # Auto-detect vendor from payload shape
 python ocsf_transformer.py --input sample_data/wiz_finding_before.json --stdout
@@ -75,7 +80,7 @@ No external dependencies — standard library only.
 ## CLI Reference
 
 ```
-usage: ocsf_transformer.py [-h] [--vendor {entra,okta,wiz,pan}]
+usage: ocsf_transformer.py [-h] [--vendor {entra,okta,windows,wiz,pan}]
                            [--input PATH] [--output PATH]
                            [--stdin] [--stdout]
                            [--include-raw] [--include-failures]
@@ -319,6 +324,8 @@ sample_data/
 ├── entra_signin_after.json           # Normalised OCSF Authentication (3002)
 ├── okta_session_start_before.json    # Raw Okta System Log (user.session.start)
 ├── okta_session_start_after.json     # Normalised OCSF Authentication (3002)
+├── windows_security_events_before.json  # Raw Windows Security Events (5 Event IDs)
+├── windows_security_events_after.json   # Normalised OCSF (3002 / 1007 / 5001)
 ├── wiz_finding_before.json           # Raw Wiz HIGH finding
 ├── wiz_finding_after.json            # Normalised OCSF Config Finding (5019)
 ├── pan_auth_before.json              # Raw PAN-OS auth logs (success + fail)
@@ -376,7 +383,8 @@ Because `class_uid` and `category_uid` are stable integers present on every even
 
 ```
 s3://security-lake/
-  class_uid=3002/date=2024-05-01/   ← all authentication events (Entra + Okta + PAN-OS)
+  class_uid=3002/date=2024-05-01/   ← all authentication events (Entra + Okta + Windows + PAN-OS)
+  class_uid=1007/date=2024-05-01/   ← all process activity events (Windows 4688/4689)
   class_uid=4001/date=2024-05-01/   ← all network activity events
   class_uid=5019/date=2024-05-01/   ← all config findings
 ```
@@ -460,4 +468,113 @@ TRANSFORMERS["myvendor"] = MyVendorTransformer()
 | **Okta and Entra both → Authentication (3002)** | Both are Identity Providers. Mapping both to the same class enables `WHERE class_uid = 3002` to query across all IdP sources without vendor-specific table sprawl. |
 | **Auth failures → Low severity** | A single auth failure is expected noise. Severity escalation (brute force) is a higher-level detection concern best handled by the SIEM's aggregation layer, not the transformer. |
 | **Okta IP chain preserved** | Okta's `request.ipChain` captures proxy hops between client and Okta. Preserving this in `src_endpoint.ip_chain` enables detection of VPN/proxy usage that a single IP field would miss. |
+| **Windows multi-class dispatch** | Windows Security events span authentication, process execution, and account management. Dispatching by Event ID to three OCSF classes keeps each class semantically coherent and queryable independently. |
+| **Windows failure substatus decoded** | 4625 SubStatus hex codes are decoded to human-readable strings in `status_detail` — eliminating the need for downstream lookup tables in SIEM rules. |
+| **4648 → Medium severity always** | Explicit credential logons are a known pass-the-hash and lateral movement indicator. Medium severity ensures they surface without requiring an aggregation rule. |
+| **Suspicious process detection in 4688** | Common LOLBin and attacker-abused process names (powershell, mshta, certutil, etc.) trigger a severity bump at transform time, enabling simpler downstream detection rules. |
 | **Okta threat suspected → severity bump** | Okta's own threat intelligence (`threatSuspected`) is authoritative for its tenant. When Okta flags a threat, the transformer bumps severity to at least Medium rather than requiring downstream rules to re-derive this. |
+
+
+### Windows Security Event Log → Authentication (3002) / Process Activity (1007) / Account Change (5001)
+
+**Source:** Windows Security Event Log (EVTX/WinEvtLog) serialized to JSON via Windows Event Forwarding, Winlogbeat, wevtutil, or the Windows Event Log API.
+
+**Design rationale for multiple OCSF classes:** Windows Security events span three distinct operational contexts. Authentication events (4624, 4625, etc.) map to OCSF Authentication (3002). Process execution events (4688, 4689) map to OCSF Process Activity (1007). Account management events (4720–4738) map to OCSF Account Change (5001). A single transformer handles all three, dispatching by Event ID.
+
+**Supported Event IDs:**
+
+| Event ID | Description | OCSF Class | Class UID |
+|----------|-------------|------------|-----------|
+| 4624 | Successful logon | Authentication | 3002 |
+| 4625 | Failed logon | Authentication | 3002 |
+| 4634 | Logoff | Authentication | 3002 |
+| 4647 | User-initiated logoff | Authentication | 3002 |
+| 4648 | Logon with explicit credentials | Authentication | 3002 |
+| 4672 | Special privileges assigned to new logon | Authentication | 3002 |
+| 4688 | Process created | Process Activity | 1007 |
+| 4689 | Process terminated | Process Activity | 1007 |
+| 4720 | User account created | Account Change | 5001 |
+| 4722 | User account enabled | Account Change | 5001 |
+| 4725 | User account disabled | Account Change | 5001 |
+| 4726 | User account deleted | Account Change | 5001 |
+| 4738 | User account changed | Account Change | 5001 |
+
+**Activity ID mapping (Authentication events):**
+
+| Event ID | OCSF `activity_id` | `activity_name` | `status_id` |
+|----------|--------------------|-----------------|-------------|
+| 4624 | `1` | Logon | `1` Success |
+| 4625 | `1` | Logon | `2` Failure |
+| 4634 | `2` | Logoff | `1` Success |
+| 4647 | `2` | Logoff | `1` Success |
+| 4648 | `1` | Logon | `1` Success |
+| 4672 | `1` | Logon | `1` Success |
+
+**Severity escalation logic:**
+
+| Condition | OCSF `severity_id` | Rationale |
+|-----------|-------------------|-----------|
+| 4625 (failed logon) | `2` — Low | Single failures are noise; brute-force detection is SIEM's job |
+| 4648 (explicit credentials) | `3` — Medium | Pass-the-hash / lateral movement indicator — always worth alerting |
+| 4672 with high-value privileges | `3` — Medium | SeDebugPrivilege, SeImpersonatePrivilege, SeTcbPrivilege, etc. |
+| 4688 with suspicious process | `3` — Medium | powershell.exe, mshta.exe, certutil.exe, rundll32.exe, wmic.exe, etc. |
+| All other events | `1` — Informational | |
+
+**Failure substatus decoding (4625):** The `SubStatus` hex code is decoded to a human-readable string in `status_detail`:
+
+| SubStatus | Meaning |
+|-----------|---------|
+| `0xc000006a` | Wrong password |
+| `0xc0000064` | User does not exist |
+| `0xc0000234` | Account locked out |
+| `0xc0000072` | Account disabled |
+| `0xc0000193` | Account expired |
+| `0xc0000071` | Password expired |
+| `0xc000006f` | Outside allowed logon hours |
+| `0xc0000070` | Workstation restriction |
+
+**Key field mappings (Authentication):**
+
+| Windows EventData field | OCSF path |
+|------------------------|-----------|
+| `TargetUserName` | `user.name` |
+| `TargetUserSid` | `user.uid` |
+| `TargetDomainName` | `user.domain` |
+| `TargetLogonId` | `user.session_uid` |
+| `SubjectUserName` | `actor.user.name` (if different from target) |
+| `IpAddress` | `src_endpoint.ip` |
+| `IpPort` | `src_endpoint.port` |
+| `WorkstationName` | `src_endpoint.name` |
+| `Computer` | `dst_endpoint.name` |
+| `LogonType` | `authentication.logon_type` |
+| `AuthenticationPackageName` | `authentication.auth_package` |
+| `LogonProcessName` | `authentication.logon_process` |
+| `SubStatus` | `authentication.sub_status` + `status_detail` (decoded) |
+| `PrivilegeList` | `privileges[]` |
+| `ProcessName` | `process.name` |
+
+**Key field mappings (Process Activity — 4688):**
+
+| Windows EventData field | OCSF path |
+|------------------------|-----------|
+| `NewProcessId` | `process.pid` |
+| `NewProcessName` | `process.name` |
+| `CommandLine` | `process.cmd_line` |
+| `ProcessId` | `process.parent_process.pid` |
+| `ParentProcessName` | `process.parent_process.name` |
+| `SubjectUserName` | `actor.user.name` |
+| `TokenElevationType` | `process.token_elevation_type` |
+
+**Key field mappings (Account Change — 4720/4738):**
+
+| Windows EventData field | OCSF path |
+|------------------------|-----------|
+| `TargetUserName` | `user.name` |
+| `TargetSid` | `user.uid` |
+| `SubjectUserName` | `actor.user.name` |
+| `SamAccountName` / `DisplayName` | `changed_attributes.*` (4738 only) |
+| `NewUacValue` / `OldUacValue` | `changed_attributes.*` (4738 only) |
+
+**Schema decision — EventID format handling:** Windows serializes EventID in three possible formats depending on the collection method: integer (`4624`), string (`"4624"`), or dict (`{"#text": "4624"}`). The transformer's `_parse_event_id()` method handles all three forms transparently.
+
+**Schema decision — Subject vs Target user:** Windows 4624 events carry both a `SubjectUser` (the account initiating the logon, often SYSTEM or a service account) and a `TargetUser` (the account being authenticated). OCSF `user` maps to `TargetUser` (the identity being asserted). `SubjectUser` populates `actor.user` only when it differs from the target — avoiding redundant data for the common case where they are the same.
