@@ -1,0 +1,201 @@
+[
+  {
+    "_comment": "4624 — Successful network logon",
+    "Event": {
+      "System": {
+        "EventID": 4624,
+        "TimeCreated": {"SystemTime": "2024-05-01T14:23:45.678Z"},
+        "Computer": "DC01.contoso.com",
+        "Channel": "Security",
+        "EventRecordID": 98765,
+        "Provider": {
+          "Name": "Microsoft-Windows-Security-Auditing",
+          "Guid": "{54849625-5478-4994-A5BA-3E3B0328C30D}"
+        },
+        "Keywords": "0x8020000000000000",
+        "Task": 12544,
+        "Level": 0,
+        "Execution": {"ProcessID": 4, "ThreadID": 120}
+      },
+      "EventData": {
+        "SubjectUserSid": "S-1-0-0",
+        "SubjectUserName": "-",
+        "SubjectDomainName": "-",
+        "SubjectLogonId": "0x0",
+        "TargetUserSid": "S-1-5-21-3623811015-3361044348-30300820-1013",
+        "TargetUserName": "alice",
+        "TargetDomainName": "CONTOSO",
+        "TargetLogonId": "0x5e4d2a",
+        "LogonType": "3",
+        "LogonProcessName": "NtLmSsp",
+        "AuthenticationPackageName": "NTLM",
+        "WorkstationName": "LAPTOP-ALICE",
+        "LogonGuid": "{00000000-0000-0000-0000-000000000000}",
+        "TransmittedServices": "-",
+        "LmPackageName": "NTLM V2",
+        "KeyLength": "128",
+        "ProcessId": "0x0",
+        "ProcessName": "-",
+        "IpAddress": "203.0.113.42",
+        "IpPort": "49152",
+        "ImpersonationLevel": "%%1833",
+        "RestrictedAdminMode": "-",
+        "TargetOutboundUserName": "-",
+        "VirtualAccount": "%%1843",
+        "TargetLinkedLogonId": "0x0",
+        "ElevatedToken": "%%1842"
+      }
+    }
+  },
+  {
+    "_comment": "4625 — Failed logon (wrong password)",
+    "Event": {
+      "System": {
+        "EventID": 4625,
+        "TimeCreated": {"SystemTime": "2024-05-01T14:24:01.123Z"},
+        "Computer": "DC01.contoso.com",
+        "Channel": "Security",
+        "EventRecordID": 98766,
+        "Provider": {
+          "Name": "Microsoft-Windows-Security-Auditing",
+          "Guid": "{54849625-5478-4994-A5BA-3E3B0328C30D}"
+        },
+        "Keywords": "0x8010000000000000",
+        "Task": 12544,
+        "Level": 0,
+        "Execution": {"ProcessID": 4, "ThreadID": 120}
+      },
+      "EventData": {
+        "SubjectUserSid": "S-1-0-0",
+        "SubjectUserName": "-",
+        "SubjectDomainName": "-",
+        "SubjectLogonId": "0x0",
+        "TargetUserSid": "S-1-0-0",
+        "TargetUserName": "alice",
+        "TargetDomainName": "CONTOSO",
+        "Status": "0xc000006d",
+        "FailureReason": "%%2313",
+        "SubStatus": "0xc000006a",
+        "LogonType": "3",
+        "LogonProcessName": "NtLmSsp",
+        "AuthenticationPackageName": "NTLM",
+        "WorkstationName": "LAPTOP-ALICE",
+        "TransmittedServices": "-",
+        "LmPackageName": "NTLM V2",
+        "KeyLength": "128",
+        "ProcessId": "0x0",
+        "ProcessName": "-",
+        "IpAddress": "203.0.113.42",
+        "IpPort": "49153"
+      }
+    }
+  },
+  {
+    "_comment": "4672 — Special privileges assigned (SeDebugPrivilege)",
+    "Event": {
+      "System": {
+        "EventID": 4672,
+        "TimeCreated": {"SystemTime": "2024-05-01T14:23:45.681Z"},
+        "Computer": "DC01.contoso.com",
+        "Channel": "Security",
+        "EventRecordID": 98767,
+        "Provider": {
+          "Name": "Microsoft-Windows-Security-Auditing",
+          "Guid": "{54849625-5478-4994-A5BA-3E3B0328C30D}"
+        },
+        "Keywords": "0x8020000000000000",
+        "Task": 12548,
+        "Level": 0,
+        "Execution": {"ProcessID": 4, "ThreadID": 120}
+      },
+      "EventData": {
+        "SubjectUserSid": "S-1-5-21-3623811015-3361044348-30300820-500",
+        "SubjectUserName": "Administrator",
+        "SubjectDomainName": "CONTOSO",
+        "SubjectLogonId": "0x5e4d2a",
+        "PrivilegeList": "SeSecurityPrivilege\nSeTakeOwnershipPrivilege\nSeLoadDriverPrivilege\nSeBackupPrivilege\nSeRestorePrivilege\nSeDebugPrivilege\nSeSystemEnvironmentPrivilege\nSeImpersonatePrivilege\nSeDelegateSessionUserImpersonatePrivilege\nSeEnableDelegationPrivilege"
+      }
+    }
+  },
+  {
+    "_comment": "4688 — Process created (powershell.exe — suspicious)",
+    "Event": {
+      "System": {
+        "EventID": 4688,
+        "TimeCreated": {"SystemTime": "2024-05-01T14:25:00.000Z"},
+        "Computer": "WORKSTATION-01.contoso.com",
+        "Channel": "Security",
+        "EventRecordID": 55321,
+        "Provider": {
+          "Name": "Microsoft-Windows-Security-Auditing",
+          "Guid": "{54849625-5478-4994-A5BA-3E3B0328C30D}"
+        },
+        "Keywords": "0x8020000000000000",
+        "Task": 13312,
+        "Level": 0,
+        "Execution": {"ProcessID": 4, "ThreadID": 88}
+      },
+      "EventData": {
+        "SubjectUserSid": "S-1-5-21-3623811015-3361044348-30300820-1013",
+        "SubjectUserName": "alice",
+        "SubjectDomainName": "CONTOSO",
+        "SubjectLogonId": "0x5e4d2a",
+        "NewProcessId": "0x1a4c",
+        "NewProcessName": "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe",
+        "TokenElevationType": "%%1937",
+        "ProcessId": "0x0f20",
+        "CommandLine": "powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand JAB...",
+        "ParentProcessName": "C:\\Windows\\explorer.exe",
+        "MandatoryLabel": "S-1-16-8192"
+      }
+    }
+  },
+  {
+    "_comment": "4720 — User account created",
+    "Event": {
+      "System": {
+        "EventID": 4720,
+        "TimeCreated": {"SystemTime": "2024-05-01T15:00:00.000Z"},
+        "Computer": "DC01.contoso.com",
+        "Channel": "Security",
+        "EventRecordID": 99001,
+        "Provider": {
+          "Name": "Microsoft-Windows-Security-Auditing",
+          "Guid": "{54849625-5478-4994-A5BA-3E3B0328C30D}"
+        },
+        "Keywords": "0x8020000000000000",
+        "Task": 13824,
+        "Level": 0,
+        "Execution": {"ProcessID": 4, "ThreadID": 200}
+      },
+      "EventData": {
+        "TargetUserName": "bob",
+        "TargetDomainName": "CONTOSO",
+        "TargetSid": "S-1-5-21-3623811015-3361044348-30300820-2001",
+        "SubjectUserSid": "S-1-5-21-3623811015-3361044348-30300820-500",
+        "SubjectUserName": "Administrator",
+        "SubjectDomainName": "CONTOSO",
+        "SubjectLogonId": "0x3e4a1f",
+        "PrivilegeList": "-",
+        "SamAccountName": "bob",
+        "DisplayName": "Bob Johnson",
+        "UserPrincipalName": "bob@contoso.com",
+        "HomeDirectory": "-",
+        "HomePath": "-",
+        "ScriptPath": "-",
+        "ProfilePath": "-",
+        "UserWorkstations": "-",
+        "PasswordLastSet": "-",
+        "AccountExpires": "%%1794",
+        "PrimaryGroupId": "513",
+        "AllowedToDelegateTo": "-",
+        "OldUacValue": "0x0",
+        "NewUacValue": "0x15",
+        "UserAccountControl": "%%2080\n%%2082\n%%2084",
+        "UserParameters": "-",
+        "SidHistory": "-",
+        "LogonHours": "%%1793"
+      }
+    }
+  }
+]
