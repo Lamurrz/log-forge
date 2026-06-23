@@ -869,5 +869,248 @@ def main(argv: list[str] | None = None) -> int:
     return 1 if failures else 0
 
 
+
+# ---------------------------------------------------------------------------
+# Okta System Log → OCSF Authentication (3002)
+# ---------------------------------------------------------------------------
+
+class OktaSystemLogTransformer(BaseTransformer):
+    """
+    Transforms Okta System Log events into OCSF Authentication (3002).
+
+    Okta's System Log is the authoritative audit log for all authentication,
+    authorization, and administrative events in an Okta tenant. Events arrive
+    via the /api/v1/logs endpoint or via log streaming integrations.
+    """
+
+    VENDOR_NAME = "Okta"
+
+    # ── Event type → OCSF activity mapping ───────────────────────────────────
+
+    _EVENT_TO_ACTIVITY: dict[str, tuple[int, str]] = {
+        "user.session.start":                       (OCSFActivityID.AUTH_LOGON,      "Logon"),
+        "user.session.end":                         (OCSFActivityID.AUTH_LOGOFF,     "Logoff"),
+        "user.authentication.sso":                  (OCSFActivityID.AUTH_LOGON,      "Logon"),
+        "user.authentication.auth_via_mfa":         (OCSFActivityID.AUTH_MFA_CHALLENGE, "MFA Challenge"),
+        "user.authentication.auth_via_factor":      (OCSFActivityID.AUTH_MFA_CHALLENGE, "MFA Challenge"),
+        "user.mfa.factor.activate":                 (OCSFActivityID.AUTH_MFA_CHALLENGE, "MFA Challenge"),
+        "user.authentication.auth_via_radius":      (OCSFActivityID.AUTH_LOGON,      "Logon"),
+        "user.authentication.auth_via_AD_agent":    (OCSFActivityID.AUTH_LOGON,      "Logon"),
+        "user.authentication.auth_via_LDAP":        (OCSFActivityID.AUTH_LOGON,      "Logon"),
+        "user.authentication.auth_via_IDP":         (OCSFActivityID.AUTH_LOGON,      "Logon"),
+    }
+
+    # ── Okta outcome.result → OCSF status mapping ─────────────────────────────
+
+    _OUTCOME_TO_STATUS: dict[str, tuple[int, str]] = {
+        "SUCCESS":   (OCSFStatusID.SUCCESS, "Success"),
+        "FAILURE":   (OCSFStatusID.FAILURE, "Failure"),
+        "SKIPPED":   (OCSFStatusID.OTHER,   "Skipped"),
+        "ALLOW":     (OCSFStatusID.SUCCESS, "Allow"),
+        "DENY":      (OCSFStatusID.FAILURE, "Deny"),
+        "CHALLENGE": (OCSFStatusID.OTHER,   "Challenge"),
+        "UNKNOWN":   (OCSFStatusID.UNKNOWN, "Unknown"),
+    }
+
+    # ── Okta severity → OCSF severity mapping ────────────────────────────────
+
+    _SEVERITY_MAP: dict[str, int] = {
+        "DEBUG":  OCSFSeverityID.INFORMATIONAL,
+        "INFO":   OCSFSeverityID.INFORMATIONAL,
+        "WARN":   OCSFSeverityID.MEDIUM,
+        "ERROR":  OCSFSeverityID.HIGH,
+    }
+
+    # ── can_handle fingerprint ────────────────────────────────────────────────
+
+    def can_handle(self, raw: dict) -> bool:
+        """
+        Okta System Log events have 'uuid', 'published', and 'eventType'.
+        All three must be present to avoid false positives.
+        """
+        return bool(
+            raw.get("uuid")
+            and raw.get("published")
+            and raw.get("eventType")
+            and isinstance(raw.get("eventType"), str)
+            and (raw["eventType"].startswith("user.") or
+                 raw["eventType"].startswith("system.") or
+                 raw["eventType"].startswith("application."))
+        )
+
+    # ── Main transform ────────────────────────────────────────────────────────
+
+    def transform(self, raw: dict) -> dict:
+        event_id   = raw.get("uuid") or str(uuid.uuid4())
+        time_ms    = _iso_to_epoch_ms(raw.get("published")) or _now_epoch_ms()
+        event_type = raw.get("eventType", "")
+
+        # Activity
+        activity_id, activity_name = self._EVENT_TO_ACTIVITY.get(
+            event_type,
+            (OCSFActivityID.AUTH_OTHER, "Other"),
+        )
+
+        # Status
+        outcome_result = _get(raw, "outcome", "result", default="UNKNOWN").upper()
+        status_id, status_str = self._OUTCOME_TO_STATUS.get(
+            outcome_result,
+            (OCSFStatusID.UNKNOWN, outcome_result),
+        )
+        status_detail = _get(raw, "outcome", "reason")
+
+        # Severity — failures are bumped to LOW if Okta reports INFO
+        okta_severity = (raw.get("severity") or "INFO").upper()
+        severity_id = self._SEVERITY_MAP.get(okta_severity, OCSFSeverityID.INFORMATIONAL)
+        if status_id == OCSFStatusID.FAILURE and severity_id == OCSFSeverityID.INFORMATIONAL:
+            severity_id = OCSFSeverityID.LOW
+
+        # Build base envelope
+        envelope = self._base_envelope(
+            class_uid=OCSFClassID.AUTHENTICATION,
+            category_uid=OCSFCategory.IDENTITY_ACCESS,
+            activity_id=activity_id,
+            activity_name=activity_name,
+            time_ms=time_ms,
+            uid=_stable_uid("okta", event_id),
+            raw=raw,
+        )
+
+        # Status fields
+        envelope["status_id"]     = status_id
+        envelope["status"]        = status_str
+        envelope["severity_id"]   = severity_id
+        envelope["severity"]      = self._severity_name(severity_id)
+        envelope["message"]       = raw.get("displayMessage", "")
+        if status_detail:
+            envelope["status_detail"] = status_detail
+
+        # User (actor)
+        actor = raw.get("actor") or {}
+        envelope["user"] = {
+            "uid":       actor.get("id", ""),
+            "name":      actor.get("alternateId", ""),
+            "full_name": actor.get("displayName", ""),
+            "type":      actor.get("type", ""),
+        }
+
+        # Source endpoint (client)
+        client = raw.get("client") or {}
+        ua     = client.get("userAgent") or {}
+        geo    = client.get("geographicalContext") or {}
+        geloc  = geo.get("geolocation") or {}
+
+        envelope["src_endpoint"] = {
+            "ip":   client.get("ipAddress", ""),
+            "agent": {
+                "name": ua.get("rawUserAgent", ""),
+                "os":   ua.get("os", ""),
+                "type": ua.get("browser", ""),
+            },
+            "location": {
+                "city":        geo.get("city", ""),
+                "state":       geo.get("state", ""),
+                "country":     geo.get("country", ""),
+                "postal_code": geo.get("postalCode", ""),
+                "lat":         geloc.get("lat"),
+                "lon":         geloc.get("lon"),
+            },
+        }
+
+        # IP chain (if present — captures proxy hops)
+        ip_chain = _get(raw, "request", "ipChain", default=[])
+        if ip_chain and isinstance(ip_chain, list):
+            envelope["src_endpoint"]["ip_chain"] = [
+                {"ip": hop.get("ip", ""), "version": hop.get("version", "")}
+                for hop in ip_chain
+            ]
+
+        # Device
+        device = raw.get("device") or {}
+        if device:
+            envelope["device"] = {
+                "uid":  device.get("id", ""),
+                "name": device.get("displayName", ""),
+                "os": {
+                    "name":    device.get("platform", ""),
+                    "version": device.get("osVersion", ""),
+                },
+            }
+
+        # Authentication context
+        auth_ctx = raw.get("authenticationContext") or {}
+        envelope["authentication"] = {
+            "credential_type":   auth_ctx.get("credentialType", ""),
+            "auth_step":         auth_ctx.get("authenticationStep", 0),
+            "external_session_id": auth_ctx.get("externalSessionId", ""),
+            "mfa_used": activity_id == OCSFActivityID.AUTH_MFA_CHALLENGE,
+        }
+
+        # Service / target application
+        targets = raw.get("target") or []
+        if targets and isinstance(targets, list):
+            primary_target = targets[0]
+            envelope["service"] = {
+                "name": primary_target.get("displayName", ""),
+                "uid":  primary_target.get("id", ""),
+                "type": primary_target.get("type", ""),
+            }
+            # Additional targets go to unmapped
+            if len(targets) > 1:
+                envelope["unmapped"]["additional_targets"] = targets[1:]
+
+        # Risk / threat context
+        debug_data = _get(raw, "debugContext", "debugData", default={})
+        threat_suspected = debug_data.get("threatSuspected", "false")
+        if threat_suspected and threat_suspected.lower() == "true":
+            envelope["risk_details"] = {
+                "threat_suspected": True,
+                "request_uri": debug_data.get("requestUri", ""),
+            }
+            # Bump severity if threat is suspected
+            if severity_id < OCSFSeverityID.MEDIUM:
+                envelope["severity_id"] = OCSFSeverityID.MEDIUM
+                envelope["severity"]    = "Medium"
+
+        # Transaction context
+        transaction = raw.get("transaction") or {}
+        if transaction:
+            envelope["unmapped"]["transaction"] = {
+                "type": transaction.get("type", ""),
+                "id":   transaction.get("id", ""),
+            }
+
+        # Okta event type preserved for downstream use
+        envelope["unmapped"]["okta_event_type"] = event_type
+        envelope["unmapped"]["okta_version"]    = raw.get("version", "")
+
+        # Catch remaining unmapped fields
+        mapped_keys = {
+            "uuid", "published", "eventType", "version", "severity",
+            "displayMessage", "outcome", "actor", "client", "device",
+            "authenticationContext", "target", "request", "transaction",
+            "debugContext",
+        }
+        for k, v in raw.items():
+            if k not in mapped_keys:
+                envelope["unmapped"][k] = v
+
+        return envelope
+
+    @staticmethod
+    def _severity_name(severity_id: int) -> str:
+        return {
+            OCSFSeverityID.UNKNOWN:       "Unknown",
+            OCSFSeverityID.INFORMATIONAL: "Informational",
+            OCSFSeverityID.LOW:           "Low",
+            OCSFSeverityID.MEDIUM:        "Medium",
+            OCSFSeverityID.HIGH:          "High",
+            OCSFSeverityID.CRITICAL:      "Critical",
+            OCSFSeverityID.FATAL:         "Fatal",
+        }.get(severity_id, "Unknown")
+
+
+TRANSFORMERS["okta"] = OktaSystemLogTransformer()
+
 if __name__ == "__main__":
     sys.exit(main())
