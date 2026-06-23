@@ -2,7 +2,7 @@
 
 **Vendor Log → [OCSF](https://schema.ocsf.io) Schema Transformer**
 
-A security-engineer utility that normalises raw vendor logs from Microsoft Entra ID, Wiz, and Palo Alto Networks PAN-OS into the [Open Cybersecurity Schema Framework (OCSF) 1.3.0](https://schema.ocsf.io) — the lingua franca for modern SIEMs and security data lakes.
+A security-engineer utility that normalises raw vendor logs from Microsoft Entra ID, Okta, Wiz, and Palo Alto Networks PAN-OS into the [Open Cybersecurity Schema Framework (OCSF) 1.3.0](https://schema.ocsf.io) — the lingua franca for modern SIEMs and security data lakes.
 
 ---
 
@@ -14,6 +14,7 @@ A security-engineer utility that normalises raw vendor logs from Microsoft Entra
 4. [CLI Reference](#cli-reference)
 5. [Mapping Logic & Schema Decisions](#mapping-logic--schema-decisions)
    - [Microsoft Entra ID → Authentication (3002)](#microsoft-entra-id--authentication-3002)
+   - [Okta → Authentication (3002)](#okta--authentication-3002)
    - [Wiz → Configuration Finding (5019)](#wiz--configuration-finding-5019)
    - [Palo Alto PAN-OS → Network Activity (4001)](#palo-alto-pan-os--network-activity-4001)
 6. [Sample Data](#sample-data)
@@ -42,6 +43,7 @@ OCSF solves this by providing:
 | Key | Vendor | Log Type | OCSF Class | Class UID | Category UID |
 |-----|--------|----------|------------|-----------|--------------|
 | `entra` | Microsoft Entra ID | Sign-In logs | Authentication | 3002 | 3 (Identity & Access Mgmt) |
+| `okta` | Okta | System Log | Authentication | 3002 | 3 (Identity & Access Mgmt) |
 | `wiz` | Wiz | Issues / Findings | Configuration Finding | 5019 | 2 (Findings) |
 | `pan` | Palo Alto Networks | PAN-OS Auth (JSON) | Network Activity | 4001 | 4 (Network Activity) |
 
@@ -52,6 +54,9 @@ OCSF solves this by providing:
 ```bash
 # Single file, explicit vendor
 python ocsf_transformer.py --vendor entra --input sample_data/entra_signin_before.json --output out.json
+
+# Okta System Log
+python ocsf_transformer.py --vendor okta --input sample_data/okta_session_start_before.json --stdout
 
 # Auto-detect vendor from payload shape
 python ocsf_transformer.py --input sample_data/wiz_finding_before.json --stdout
@@ -70,7 +75,7 @@ No external dependencies — standard library only.
 ## CLI Reference
 
 ```
-usage: ocsf_transformer.py [-h] [--vendor {entra,wiz,pan}]
+usage: ocsf_transformer.py [-h] [--vendor {entra,okta,wiz,pan}]
                            [--input PATH] [--output PATH]
                            [--stdin] [--stdout]
                            [--include-raw] [--include-failures]
@@ -102,7 +107,7 @@ usage: ocsf_transformer.py [-h] [--vendor {entra,wiz,pan}]
 **Activity ID selection:**
 
 | Entra `authenticationRequirement` | OCSF `activity_id` | `activity_name` |
-|-----------------------------------|--------------------|-----------------|
+|-----------------------------------|--------------------|-----------------| 
 | contains `multiFactorAuthentication` | `4` | MFA Challenge |
 | anything else | `1` | Logon |
 
@@ -113,7 +118,7 @@ usage: ocsf_transformer.py [-h] [--vendor {entra,wiz,pan}]
 **Severity mapping** (driven by `riskLevelDuringSignIn`):
 
 | Entra risk level | OCSF `severity_id` |
-|------------------|--------------------|
+|------------------|-------------------|
 | `none` | `1` — Informational |
 | `low` | `2` — Low |
 | `medium` | `3` — Medium |
@@ -140,6 +145,83 @@ usage: ocsf_transformer.py [-h] [--vendor {entra,wiz,pan}]
 
 ---
 
+### Okta → Authentication (3002)
+
+**Source:** Okta System Log API (`/api/v1/logs`) or Okta log streaming integrations.
+
+**Design rationale for class selection:** Okta is an Identity Provider — all events represent authentication or authorization actions against an identity. OCSF Authentication (3002) is the correct class, matching Entra ID. Both can be queried with `WHERE class_uid = 3002` for unified cross-IdP analysis.
+
+**Event type → Activity ID mapping:**
+
+| Okta `eventType` | OCSF `activity_id` | `activity_name` |
+|------------------|--------------------|-----------------|
+| `user.session.start` | `1` | Logon |
+| `user.session.end` | `2` | Logoff |
+| `user.authentication.sso` | `1` | Logon |
+| `user.authentication.auth_via_mfa` | `4` | MFA Challenge |
+| `user.authentication.auth_via_factor` | `4` | MFA Challenge |
+| `user.mfa.factor.activate` | `4` | MFA Challenge |
+| `user.authentication.auth_via_radius` | `1` | Logon |
+| `user.authentication.auth_via_IDP` | `1` | Logon |
+| all other `user.*` / `system.*` / `application.*` | `99` | Other |
+
+**Status mapping** (driven by `outcome.result`):
+
+| Okta `outcome.result` | OCSF `status_id` | `status` |
+|-----------------------|------------------|----------|
+| `SUCCESS` | `1` | Success |
+| `FAILURE` | `2` | Failure |
+| `ALLOW` | `1` | Allow |
+| `DENY` | `2` | Deny |
+| `CHALLENGE` | `99` | Challenge |
+| `SKIPPED` | `99` | Skipped |
+| `UNKNOWN` | `0` | Unknown |
+
+**Severity mapping:**
+
+| Okta `severity` | OCSF `severity_id` | Notes |
+|-----------------|--------------------|-------|
+| `DEBUG` | `1` — Informational | |
+| `INFO` | `1` — Informational | Bumped to Low if outcome is FAILURE |
+| `WARN` | `3` — Medium | |
+| `ERROR` | `4` — High | |
+| `threatSuspected = true` | `3` — Medium (minimum) | Bumped from any lower severity |
+
+**Key field mappings:**
+
+| Okta field | OCSF path |
+|------------|-----------|
+| `uuid` | `metadata.uid` (stable UID base) |
+| `published` | `time` (epoch ms) |
+| `eventType` | `activity_id` / `activity_name` |
+| `outcome.result` | `status_id` / `status` |
+| `outcome.reason` | `status_detail` |
+| `severity` | `severity_id` |
+| `actor.alternateId` | `user.name` |
+| `actor.id` | `user.uid` |
+| `actor.displayName` | `user.full_name` |
+| `client.ipAddress` | `src_endpoint.ip` |
+| `client.userAgent.rawUserAgent` | `src_endpoint.agent.name` |
+| `client.userAgent.os` | `src_endpoint.agent.os` |
+| `client.geographicalContext.*` | `src_endpoint.location.*` |
+| `request.ipChain` | `src_endpoint.ip_chain` |
+| `device.displayName` | `device.name` |
+| `device.id` | `device.uid` |
+| `device.platform` | `device.os.name` |
+| `authenticationContext.credentialType` | `authentication.credential_type` |
+| `authenticationContext.externalSessionId` | `authentication.external_session_id` |
+| `target[0].displayName` | `service.name` |
+| `debugContext.debugData.threatSuspected` | `risk_details.threat_suspected` |
+| `displayMessage` | `message` |
+
+**IP chain:** Okta's `request.ipChain` captures intermediate proxy hops between the client and Okta. This is preserved in `src_endpoint.ip_chain` as an array of `{ip, version}` objects — useful for detecting VPN or proxy usage.
+
+**Threat detection:** When `debugContext.debugData.threatSuspected == "true"`, the event is tagged with `risk_details.threat_suspected: true` and severity is bumped to at least Medium, regardless of the Okta severity field.
+
+**Schema decision:** `target[0]` (the application being accessed via SSO) maps to `service.name`. Additional targets beyond the first are preserved in `unmapped.additional_targets` to avoid information loss in multi-target events.
+
+---
+
 ### Wiz → Configuration Finding (5019)
 
 **Source:** Wiz Issues API or SIEM export.
@@ -147,7 +229,7 @@ usage: ocsf_transformer.py [-h] [--vendor {entra,wiz,pan}]
 **Activity ID selection** (driven by `status`):
 
 | Wiz `status` | OCSF `activity_id` | `activity_name` |
-|--------------|--------------------|-----------------|
+|--------------|--------------------|-----------------| 
 | `OPEN` | `1` | Create |
 | `IN_PROGRESS` | `2` | Update |
 | `RESOLVED` | `3` | Close |
@@ -229,16 +311,18 @@ Auth failures are Low rather than Medium/High because a single failure is expect
 
 ## Sample Data
 
-The `sample_data/` directory contains before/after pairs for all three vendors:
+The `sample_data/` directory contains before/after pairs for all four vendors:
 
 ```
 sample_data/
-├── entra_signin_before.json    # Raw Entra ID sign-in log
-├── entra_signin_after.json     # Normalised OCSF Authentication (3002)
-├── wiz_finding_before.json     # Raw Wiz HIGH finding
-├── wiz_finding_after.json      # Normalised OCSF Config Finding (5019)
-├── pan_auth_before.json        # Raw PAN-OS auth logs (success + fail)
-└── pan_auth_after.json         # Normalised OCSF Network Activity (4001)
+├── entra_signin_before.json          # Raw Entra ID sign-in log
+├── entra_signin_after.json           # Normalised OCSF Authentication (3002)
+├── okta_session_start_before.json    # Raw Okta System Log (user.session.start)
+├── okta_session_start_after.json     # Normalised OCSF Authentication (3002)
+├── wiz_finding_before.json           # Raw Wiz HIGH finding
+├── wiz_finding_after.json            # Normalised OCSF Config Finding (5019)
+├── pan_auth_before.json              # Raw PAN-OS auth logs (success + fail)
+└── pan_auth_after.json               # Normalised OCSF Network Activity (4001)
 ```
 
 ---
@@ -285,23 +369,23 @@ WHERE class_uid = 3002        -- Authentication
 ORDER BY time DESC;
 ```
 
-This query works identically whether the event came from Entra or PAN-OS.
+This query works identically whether the event came from Entra, Okta, or PAN-OS.
 
 **2. Partitioning strategy.**
 Because `class_uid` and `category_uid` are stable integers present on every event, a lakehouse can partition by `(class_uid, date)` — giving optimal partition pruning for class-specific queries without vendor-specific table sprawl.
 
 ```
 s3://security-lake/
-  class_uid=3002/date=2024-05-01/   ← all authentication events
+  class_uid=3002/date=2024-05-01/   ← all authentication events (Entra + Okta + PAN-OS)
   class_uid=4001/date=2024-05-01/   ← all network activity events
   class_uid=5019/date=2024-05-01/   ← all config findings
 ```
 
 **3. Cross-vendor correlation.**
-`metadata.uid` enables deduplication. `user.name` (always UPN form where available) enables joining authentication events across Entra and PAN-OS on a single identity key without bespoke normalisation logic.
+`metadata.uid` enables deduplication. `user.name` (always UPN form where available) enables joining authentication events across Entra and Okta on a single identity key without bespoke normalisation logic.
 
 **4. Severity-based alerting.**
-`severity_id` is a normalised integer across all vendors — a single alerting rule fires on `severity_id >= 4` (High/Critical) regardless of whether the source is Wiz, Entra, or a future vendor.
+`severity_id` is a normalised integer across all vendors — a single alerting rule fires on `severity_id >= 4` (High/Critical) regardless of whether the source is Wiz, Entra, Okta, or a future vendor.
 
 **5. Preserving raw signal.**
 The `unmapped` object retains all vendor-specific fields not covered by OCSF. In a lakehouse context, `unmapped` can be stored as a JSON column, ensuring no signal is lost while keeping the normalised columns queryable without schema churn.
@@ -352,7 +436,7 @@ class MyVendorTransformer(BaseTransformer):
         return envelope
 ```
 
-2. **Register it:**
+2. **Register it before the CLI section:**
 
 ```python
 TRANSFORMERS["myvendor"] = MyVendorTransformer()
@@ -373,4 +457,7 @@ TRANSFORMERS["myvendor"] = MyVendorTransformer()
 | **Failures are non-fatal** | `ingest()` continues processing the batch even if individual events fail. Use `--include-failures` to surface failures without aborting the pipeline. |
 | **Auto-detection by payload shape** | `can_handle()` fingerprints are deliberately conservative (require multiple distinctive fields) to avoid false positives when mixing vendor feeds in a single batch. |
 | **PAN-OS → Network Activity, not Authentication** | PAN-OS is a network enforcement point. Authentication (3002) is more appropriate for IdP-sourced events. Network Activity (4001) better reflects firewall-mediated access control. |
+| **Okta and Entra both → Authentication (3002)** | Both are Identity Providers. Mapping both to the same class enables `WHERE class_uid = 3002` to query across all IdP sources without vendor-specific table sprawl. |
 | **Auth failures → Low severity** | A single auth failure is expected noise. Severity escalation (brute force) is a higher-level detection concern best handled by the SIEM's aggregation layer, not the transformer. |
+| **Okta IP chain preserved** | Okta's `request.ipChain` captures proxy hops between client and Okta. Preserving this in `src_endpoint.ip_chain` enables detection of VPN/proxy usage that a single IP field would miss. |
+| **Okta threat suspected → severity bump** | Okta's own threat intelligence (`threatSuspected`) is authoritative for its tenant. When Okta flags a threat, the transformer bumps severity to at least Medium rather than requiring downstream rules to re-derive this. |
